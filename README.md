@@ -19,6 +19,8 @@
   - [wg-add —— 添加设备](#wg-add--添加设备)
   - [wg-list —— 查看设备](#wg-list--查看设备)
   - [wg-remove —— 删除设备](#wg-remove--删除设备)
+  - [wg-doctor —— 一键诊断/打印日志](#wg-doctor--一键诊断打印日志)
+  - [wg-uninstall —— 卸载](#wg-uninstall--卸载)
 - [客户端配置说明](#客户端配置说明)
 - [常见问题与排查](#常见问题与排查)
 - [文件与目录结构](#文件与目录结构)
@@ -44,6 +46,8 @@ WireGuard Manager 用纯 Bash 实现，封装了 WireGuard 服务端的初始化
 - **双向转发**：同时放行 `-i` / `-o` 两个方向的 FORWARD，避免回程被丢（Docker / ufw 环境常见问题）。
 - **幂等与校验**：规则重复执行不会叠加；配置非法或重载失败会显式报错。
 - **可定制 DNS**：默认 `1.1.1.1, 8.8.8.8`，可通过环境变量覆盖。
+- **一键诊断**：`wg-doctor` 只读收集服务状态、握手、路由、iptables、端口、连通性等日志并落盘，网络不通时一键取证。
+- **一键卸载**：`wg-uninstall` 自动备份配置后清理服务、规则、命令，可选卸载软件包。
 
 ---
 
@@ -96,9 +100,11 @@ curl -fsSL https://raw.githubusercontent.com/messi1991/wireguard-manager/main/in
 3. 开启内核 IP 转发；
 4. 生成服务端密钥并写入 `/etc/wireguard/wg0.conf`；
 5. 启动并设置 `wg-quick@wg0` 开机自启；
-6. 下载三个管理脚本到 `/usr/local/bin/`。
+6. 下载五个管理脚本到 `/usr/local/bin/`（`wg-add`、`wg-list`、`wg-remove`、`wg-doctor`、`wg-uninstall`）。
 
-安装完成后即可使用全局命令 `wg-add` / `wg-list` / `wg-remove`。
+安装完成后即可使用全局命令 `wg-add` / `wg-list` / `wg-remove` / `wg-doctor` / `wg-uninstall`。
+
+> 重复执行 `install.sh` 不会清空已有客户端：脚本会先备份 `wg0.conf`，保留其中的 `[Peer]` 并顺手清理非法的空 `[Peer]` 块。
 
 ---
 
@@ -162,6 +168,29 @@ sudo wg-remove              # 交互式删除，需二次确认
 
 其它在线设备完全不受影响。
 
+### wg-doctor —— 一键诊断/打印日志
+
+网络不通时，先运行诊断脚本，它会**只读**收集排查所需的全部信息（不会修改任何配置）：
+
+```bash
+sudo wg-doctor              # 常规诊断
+sudo wg-doctor --capture    # 额外抓取 8 秒 51820/UDP 握手包（需 tcpdump）
+```
+
+内容包括：系统/内核、`wg-quick` 服务状态、`wg show` 握手、服务端与客户端配置（**私钥自动脱敏**）、路由表、IP 转发、iptables/ufw/nftables、端口监听、公网 IP、连通性测试、最近日志，并在结尾给出**问题清单与处理优先级**。
+
+输出会同时保存到 `/tmp/wg-doctor-<时间戳>.log`，把该文件内容发给维护者即可快速定位。
+
+### wg-uninstall —— 卸载
+
+```bash
+sudo wg-uninstall                   # 卸载，自动备份配置
+sudo wg-uninstall --purge-packages  # 同时卸载 wireguard / qrencode 软件包
+sudo wg-uninstall --yes             # 跳过确认（脚本化调用）
+```
+
+执行流程：备份 `/etc/wireguard` → 停止并禁用 `wg-quick@wg0` → 清理 iptables 规则 → 删除配置与全局命令 → 可选卸载软件包。备份默认保留在 `/root/wireguard-backup-<时间戳>.tar.gz`。
+
 ---
 
 ## 客户端配置说明
@@ -202,6 +231,8 @@ scp root@<服务器IP>:/etc/wireguard/clients/<设备名>.conf ./
 ---
 
 ## 常见问题与排查
+
+> 💡 **网络不通时，第一步先运行 `sudo wg-doctor`**，它会把下面排查所需的信息一次性打印并保存到 `/tmp/wg-doctor-*.log`，结尾还会给出问题清单。
 
 ### 1. 客户端已导入，但完全无法访问网络
 
@@ -282,19 +313,36 @@ sudo systemctl restart wg-quick@wg0
 
 | 路径 | 说明 |
 | --- | --- |
-| `install.sh` | 服务端一键安装脚本 |
+| `install.sh` | 服务端一键安装脚本（可重复执行，保留已有客户端） |
 | `wg-add.sh` | 添加客户端 → 安装为 `wg-add` |
 | `wg-list.sh` | 列出客户端 → 安装为 `wg-list` |
 | `wg-remove.sh` | 删除客户端 → 安装为 `wg-remove` |
+| `wg-doctor.sh` | 只读诊断/打印日志 → 安装为 `wg-doctor` |
+| `wg-uninstall.sh` | 卸载脚本 → 安装为 `wg-uninstall` |
 | `/etc/wireguard/wg0.conf` | 服务端配置（`600`） |
 | `/etc/wireguard/server_private.key` / `server_public.key` | 服务端密钥对 |
 | `/etc/wireguard/clients/<名称>.conf` | 各客户端配置（`600`） |
-| `/usr/local/bin/wg-add` `wg-list` `wg-remove` | 全局管理命令 |
+| `/usr/local/bin/wg-add` `wg-list` `wg-remove` `wg-doctor` `wg-uninstall` | 全局管理/诊断/卸载命令 |
 | `/etc/sysctl.d/99-wg.conf` | 内核 IP 转发持久化配置 |
 
 ---
 
 ## 卸载
+
+推荐直接用卸载脚本（会自动备份配置）：
+
+```bash
+sudo wg-uninstall
+```
+
+如需连软件包一起卸载：
+
+```bash
+sudo wg-uninstall --purge-packages
+```
+
+<details>
+<summary>或手动卸载</summary>
 
 ```bash
 # 停止并禁用服务
@@ -302,7 +350,8 @@ sudo systemctl stop wg-quick@wg0
 sudo systemctl disable wg-quick@wg0
 
 # 移除全局命令
-sudo rm -f /usr/local/bin/wg-add /usr/local/bin/wg-list /usr/local/bin/wg-remove
+sudo rm -f /usr/local/bin/wg-add /usr/local/bin/wg-list /usr/local/bin/wg-remove \
+           /usr/local/bin/wg-doctor /usr/local/bin/wg-uninstall
 
 # 移除配置（含所有客户端，谨慎操作，建议先备份）
 sudo rm -rf /etc/wireguard /etc/sysctl.d/99-wg.conf
@@ -315,6 +364,8 @@ sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 # 可选：卸载软件包
 sudo apt-get remove --purge -y wireguard
 ```
+
+</details>
 
 ---
 

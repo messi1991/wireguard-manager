@@ -61,6 +61,20 @@ if [ ! -f "server_private.key" ]; then
 fi
 SERVER_PRIV_KEY=$(cat server_private.key)
 
+# 若已存在 wg0.conf（重复执行安装），先备份并保留已有客户端 Peer，
+# 避免重装/修复时把已添加的设备全部清空；同时清理没有 PublicKey 的非法 [Peer] 块。
+PEERS_TMP=""
+if [ -f "$WG_DIR/wg0.conf" ]; then
+  BAK="$WG_DIR/wg0.conf.bak.$(date +%Y%m%d-%H%M%S)"
+  cp "$WG_DIR/wg0.conf" "$BAK"
+  echo "[!] 检测到已存在的 wg0.conf，已备份到 $BAK"
+  PEERS_TMP=$(mktemp)
+  awk 'BEGIN{RS="";ORS="\n\n"} /\[Peer\]/ && /PublicKey/' "$WG_DIR/wg0.conf" > "$PEERS_TMP"
+  if [ -s "$PEERS_TMP" ]; then
+    echo "[+] 将保留已有的 $(grep -c '^\[Peer\]' "$PEERS_TMP") 个客户端 Peer。"
+  fi
+fi
+
 # 说明（这是“能握手但上不了网”的关键）：
 # 全局代理模式下，客户端 <-> 外网 的回程报文会命中 FORWARD 的 -o wg0 方向。
 # 如果系统 FORWARD 默认策略是 DROP（安装 Docker / 启用 ufw 时很常见），
@@ -74,6 +88,13 @@ PrivateKey = $SERVER_PRIV_KEY
 PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i %i -j ACCEPT; iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o %i -j ACCEPT; iptables -t nat -C POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || true
 EOF
+
+# 回填保留的客户端 Peer
+if [ -n "$PEERS_TMP" ] && [ -s "$PEERS_TMP" ]; then
+  echo "" >> "$WG_DIR/wg0.conf"
+  cat "$PEERS_TMP" >> "$WG_DIR/wg0.conf"
+fi
+[ -n "$PEERS_TMP" ] && rm -f "$PEERS_TMP"
 
 chmod 600 "$WG_DIR/wg0.conf"
 
@@ -92,14 +113,20 @@ REPO_URL="https://raw.githubusercontent.com/messi1991/wireguard-manager/main"
 curl -fsSL "$REPO_URL/wg-add.sh" -o /usr/local/bin/wg-add
 curl -fsSL "$REPO_URL/wg-list.sh" -o /usr/local/bin/wg-list
 curl -fsSL "$REPO_URL/wg-remove.sh" -o /usr/local/bin/wg-remove
+curl -fsSL "$REPO_URL/wg-doctor.sh" -o /usr/local/bin/wg-doctor
+curl -fsSL "$REPO_URL/wg-uninstall.sh" -o /usr/local/bin/wg-uninstall
 
 chmod +x /usr/local/bin/wg-add
 chmod +x /usr/local/bin/wg-list
 chmod +x /usr/local/bin/wg-remove
+chmod +x /usr/local/bin/wg-doctor
+chmod +x /usr/local/bin/wg-uninstall
 
 echo "=================================================="
 echo "[+] WireGuard 服务端安装与初始化成功！"
 echo "[+] 服务端公网 IP: $PUBLIC_IP"
 echo "[+] 监听端口: 51820 (UDP)"
 echo "[+] 请确认云厂商安全组 / 防火墙已放行 51820/UDP"
+echo "[+] 网络异常时运行 sudo wg-doctor 生成诊断日志"
+echo "[+] 需要卸载时运行 sudo wg-uninstall"
 echo "=================================================="
