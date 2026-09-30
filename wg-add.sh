@@ -96,6 +96,18 @@ if ! wg syncconf wg0 <(wg-quick strip wg0); then
   exit 1
 fi
 
+# 在 20000-60000 之间为客户端随机分配一个未被占用的端口
+USED_PORTS=$(grep -oE "Endpoint = [^:]+:[0-9]+" "$CLIENT_DIR"/*.conf 2>/dev/null | awk -F: '{print $3}' || true)
+CLIENT_PORT=""
+for _ in {1..100}; do
+  candidate=$((RANDOM % 40001 + 20000))
+  if ! echo "$USED_PORTS" | grep -qx "$candidate"; then
+    CLIENT_PORT="$candidate"
+    break
+  fi
+done
+[ -z "$CLIENT_PORT" ] && CLIENT_PORT=$((RANDOM % 40001 + 20000))
+
 CLIENT_CONF_PATH="$CLIENT_DIR/$CLIENT_NAME.conf"
 cat > "$CLIENT_CONF_PATH" <<EOF
 [Interface]
@@ -105,7 +117,7 @@ DNS = $DNS_SERVERS
 
 [Peer]
 PublicKey = $SERVER_PUB_KEY
-Endpoint = $PUBLIC_IP:51820
+Endpoint = $PUBLIC_IP:$CLIENT_PORT
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
@@ -114,7 +126,7 @@ chmod 600 "$CLIENT_CONF_PATH"
 echo "=================================================="
 echo "[+] 客户端 '$CLIENT_NAME' 配置生成成功！"
 echo "[+] 配置文件保存在: $CLIENT_CONF_PATH"
-echo "[+] 内网 IP: $CLIENT_IP    Endpoint: $PUBLIC_IP:51820"
+echo "[+] 内网 IP: $CLIENT_IP    Endpoint: $PUBLIC_IP:$CLIENT_PORT"
 echo "--------------------------------------------------"
 echo "手机端扫码连接 (WireGuard App)："
 qrencode -t ansiutf8 < "$CLIENT_CONF_PATH"

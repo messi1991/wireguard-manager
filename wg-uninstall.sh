@@ -89,6 +89,9 @@ if [ -n "$DEFAULT_IF" ]; then
     iptables -t nat -D POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || break
   done
 fi
+while iptables -t nat -C PREROUTING -p udp --dport 20000:60000 -j DNAT --to-destination :51820 2>/dev/null; do
+  iptables -t nat -D PREROUTING -p udp --dport 20000:60000 -j DNAT --to-destination :51820 2>/dev/null || break
+done
 echo "[+] 已清理残留 iptables 规则（如有）。"
 
 # 4. 删除配置与全局命令 -----------------------------------------------------
@@ -103,7 +106,7 @@ echo "[+] 已删除配置目录与全局命令。"
 
 # ufw 规则
 if command -v ufw >/dev/null 2>&1; then
-  ufw delete allow 51820/udp >/dev/null 2>&1 || true
+  ufw delete allow 20000:60000/udp >/dev/null 2>&1 || true
 fi
 
 # 重新加载 sysctl（恢复默认转发行为）

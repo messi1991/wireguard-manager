@@ -85,8 +85,8 @@ cat > "$WG_DIR/wg0.conf" <<EOF
 Address = 10.0.0.1/24
 ListenPort = 51820
 PrivateKey = $SERVER_PRIV_KEY
-PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i %i -j ACCEPT; iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o %i -j ACCEPT; iptables -t nat -C POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || true
+PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i %i -j ACCEPT; iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o %i -j ACCEPT; iptables -t nat -C POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE; iptables -t nat -C PREROUTING -p udp --dport 20000:60000 -j DNAT --to-destination :51820 2>/dev/null || iptables -t nat -A PREROUTING -p udp --dport 20000:60000 -j DNAT --to-destination :51820
+PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -o $DEFAULT_INTERFACE -j MASQUERADE 2>/dev/null || true; iptables -t nat -D PREROUTING -p udp --dport 20000:60000 -j DNAT --to-destination :51820 2>/dev/null || true
 EOF
 
 # 回填保留的客户端 Peer
@@ -98,10 +98,10 @@ fi
 
 chmod 600 "$WG_DIR/wg0.conf"
 
-# 如果本机启用了 ufw，放行 WireGuard 端口，否则握手包会被 INPUT 链拦掉。
+# 如果本机启用了 ufw，放行 WireGuard 端口范围，否则握手包会被 INPUT 链拦掉。
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow 51820/udp >/dev/null 2>&1
-  echo "[+] 检测到 ufw 已启用，已放行 51820/udp。"
+  ufw allow 20000:60000/udp >/dev/null 2>&1
+  echo "[+] 检测到 ufw 已启用，已放行 20000:60000/udp。"
 fi
 
 systemctl enable wg-quick@wg0
@@ -125,8 +125,8 @@ chmod +x /usr/local/bin/wg-uninstall
 echo "=================================================="
 echo "[+] WireGuard 服务端安装与初始化成功！"
 echo "[+] 服务端公网 IP: $PUBLIC_IP"
-echo "[+] 监听端口: 51820 (UDP)"
-echo "[+] 请确认云厂商安全组 / 防火墙已放行 51820/UDP"
+echo "[+] 监听端口范围: 20000-60000 (UDP -> 51820)"
+echo "[+] 请确认云厂商安全组 / 防火墙已放行 20000-60000/UDP"
 echo "[+] 网络异常时运行 sudo wg-doctor 生成诊断日志"
 echo "[+] 需要卸载时运行 sudo wg-uninstall"
 echo "=================================================="
