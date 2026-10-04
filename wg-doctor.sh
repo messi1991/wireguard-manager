@@ -15,9 +15,19 @@ WG_IF="${WG_IF:-wg0}"
 WG_DIR="/etc/wireguard"
 WG_CONF="$WG_DIR/$WG_IF.conf"
 CLIENT_DIR="$WG_DIR/clients"
-WG_PORT="${WG_PORT:-51820}"
+
+# 端口规划优先使用 install.sh 写入的状态文件，其次才用环境变量/默认值，
+# 避免改了 WG_LISTEN_PORT / 端口范围后诊断脚本仍在按旧端口检查。
+SRV_PORT_MIN=20000; SRV_PORT_MAX=60000; SRV_LISTEN_PORT=51820
+if [ -r "$WG_DIR/.port_range" ]; then
+  # shellcheck disable=SC1090
+  . "$WG_DIR/.port_range"
+fi
+SRV_PORT_MIN="${SRV_PORT_MIN:-20000}"
+SRV_PORT_MAX="${SRV_PORT_MAX:-60000}"
+WG_PORT="${WG_PORT:-${SRV_LISTEN_PORT:-51820}}"
 CAPTURE=0
-[ "$1" = "--capture" ] && CAPTURE=1
+[ "${1:-}" = "--capture" ] && CAPTURE=1
 
 if [ "$EUID" -ne 0 ]; then
   echo "[-] 请使用 root 权限运行: sudo wg-doctor"
@@ -27,6 +37,19 @@ fi
 LOG="/tmp/wg-doctor-$(date +%Y%m%d-%H%M%S).log"
 # 所有输出同时写入日志文件
 exec > >(tee -a "$LOG") 2>&1
+
+# 默认出口网卡：优先使用安装时记录的网卡，其次实时探测（不能固定取第 5 个字段）
+DEFAULT_IF=""
+if [ -f "$WG_DIR/.default_if" ]; then
+  DEFAULT_IF=$(cat "$WG_DIR/.default_if" 2>/dev/null)
+fi
+if [ -z "$DEFAULT_IF" ]; then
+  DEFAULT_IF=$(ip route show default 2>/dev/null | awk '
+    /default/ {
+      for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
+    }' | head -n1)
+fi
+WG_NET="10.0.0"
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -38,7 +61,8 @@ section() {
   echo "############################################################################"
 }
 run() { echo "\$ $*"; eval "$*" 2>&1 || echo "  [命令执行失败, exit=$?]"; }
-mask() { sed -E 's/^(PrivateKey|PresharedKey)[[:space:]]*=.*/\1 = <已脱敏>/'; }
+# 脱敏时兼容行首空白（`  PrivateKey = ...` 也必须被遮蔽，否则私钥会明文写进日志）
+mask() { sed -E 's/^([ \t]*)(PrivateKey|PresharedKey)[ \t]*=.*/\1\2 = <已脱敏>/'; }
 has() { command -v "$1" >/dev/null 2>&1; }
 
 # 用于最后汇总
@@ -50,7 +74,8 @@ good()    { GOOD+=("$1"); }
 echo "WireGuard Doctor 诊断报告"
 echo "生成时间 : $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "日志文件 : $LOG"
-echo "接口     : $WG_IF     端口: ${WG_PORT}/UDP"
+echo "接口     : $WG_IF     端口: ${WG_PORT}/UDP（客户端随机端口范围 ${SRV_PORT_MIN}-${SRV_PORT_MAX}）"
+echo "默认网卡 : ${DEFAULT_IF:-未检测到}    客户端网段: $WG_NET.0/24"
 
 # ---------------------------------------------------------------------------
 section "1. 系统与内核"
@@ -100,15 +125,15 @@ if has wg && wg show "$WG_IF" >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-section "5. 服务端配置 wg0.conf（已脱敏）"
+section "5. 服务端配置 ${WG_IF}.conf（已脱敏）"
 if [ -f "$WG_CONF" ]; then
   run "ls -l $WG_CONF"
-  echo "---------------- wg0.conf (脱敏) ----------------"
+  echo "---------------- ${WG_IF}.conf (脱敏) ----------------"
   mask < "$WG_CONF"
   echo "------------------------------------------------"
   # 检查是否有非法空 Peer（无 PublicKey）
   if mask < "$WG_CONF" | awk 'BEGIN{RS="";ORS="\n\n"} /\[Peer\]/ && !/PublicKey/' | grep -q '\[Peer\]'; then
-    problem "wg0.conf 中存在没有 PublicKey 的非法 [Peer] 块，会导致 wg-quick 启动失败"
+    problem "${WG_IF}.conf 中存在没有 PublicKey 的非法 [Peer] 块，会导致 wg-quick 启动失败"
   fi
 else
   problem "未找到配置文件 $WG_CONF"
@@ -131,13 +156,14 @@ fi
 section "7. 路由表"
 run "ip route show"
 run "ip route show default"
-run "ip route show table all 2>/dev/null | grep -E \"$WG_IF|10\\.0\\.0\\.\" || echo '  [!] 未看到与 wg 相关的路由'"
+run "ip route show table all 2>/dev/null | grep -E \"$WG_IF|$WG_NET\\\\.\" || echo '  [!] 未看到与 wg 相关的路由'"
 
 # ---------------------------------------------------------------------------
 section "8. 内核 IP 转发"
 run "sysctl net.ipv4.ip_forward"
 run "sysctl net.ipv4.conf.all.rp_filter 2>/dev/null"
 run "cat /etc/sysctl.d/99-wg.conf 2>/dev/null || echo '  未找到 /etc/sysctl.d/99-wg.conf'"
+run "sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter 2>/dev/null"
 if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ]; then
   good "内核 IP 转发已开启"
 else
@@ -151,7 +177,6 @@ run "iptables -t nat -S 2>&1"
 run "iptables -L FORWARD -n -v 2>&1"
 run "iptables -t nat -L POSTROUTING -n -v 2>&1"
 
-DEFAULT_IF=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
 echo
 echo "  默认出口网卡: ${DEFAULT_IF:-未检测到}"
 if iptables -C FORWARD -i "$WG_IF" -j ACCEPT 2>/dev/null; then
@@ -168,6 +193,11 @@ if [ -n "$DEFAULT_IF" ] && iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MA
   good "NAT MASQUERADE 存在 (-o $DEFAULT_IF)"
 else
   problem "NAT POSTROUTING 缺少 -o ${DEFAULT_IF:-eth0} -j MASQUERADE（客户端无法共享服务器公网出口）"
+fi
+if iptables -t nat -C PREROUTING -p udp --dport "${SRV_PORT_MIN}:${SRV_PORT_MAX}" -j DNAT --to-destination :"$WG_PORT" 2>/dev/null; then
+  good "NAT PREROUTING 已将 ${SRV_PORT_MIN}:${SRV_PORT_MAX}/UDP 转发到 ${WG_PORT}"
+else
+  problem "NAT PREROUTING 缺少 ${SRV_PORT_MIN}:${SRV_PORT_MAX}/UDP -> ${WG_PORT} 的 DNAT 规则（客户端使用随机端口时无法连接；可用 sudo /etc/wireguard/nat.sh up $WG_IF 重建）"
 fi
 echo
 echo "  FORWARD 链默认策略:"
@@ -186,7 +216,7 @@ fi
 
 # ---------------------------------------------------------------------------
 section "11. 端口监听"
-run "ss -lunp 2>/dev/null | grep -E \"${WG_PORT}|wg\" || echo '  [!] 未发现监听 ${WG_PORT}/UDP 的进程'"
+run "ss -lunp 2>/dev/null | grep -E \"${WG_PORT}|wg\" || echo \"  [!] 未发现监听 ${WG_PORT}/UDP 的进程\""
 if ss -lunp 2>/dev/null | grep -q ":${WG_PORT}"; then
   good "已监听 ${WG_PORT}/UDP"
 else
@@ -200,7 +230,7 @@ echo "  （客户端配置里的 Endpoint 必须等于上面这个公网 IP）"
 
 # ---------------------------------------------------------------------------
 section "13. 连通性测试（从服务器自身发起）"
-run "ping -c 2 -W 2 10.0.0.1 2>&1"
+run "ping -c 2 -W 2 $WG_NET.1 2>&1"
 [ -n "$DEFAULT_IF" ] && run "ping -c 2 -W 2 -I $DEFAULT_IF 223.5.5.5 2>&1"
 run "getent hosts www.baidu.com 2>&1 || echo '  [!] DNS 解析失败'"
 run "curl -4 -fsS -o /dev/null -w 'curl https 状态码: %{http_code}, 耗时: %{time_total}s\n' --max-time 8 https://www.baidu.com 2>&1 || echo '  [!] HTTPS 出站请求失败'"
@@ -209,13 +239,13 @@ if has dig; then run "dig +short www.baidu.com @223.5.5.5 2>&1"; fi
 # ---------------------------------------------------------------------------
 section "14. 最近日志 / dmesg"
 run "journalctl -u wg-quick@$WG_IF -n 80 --no-pager 2>&1"
-run "dmesg 2>/dev/null | grep -i -E 'wireguard|wg0' | tail -n 30 || echo '  dmesg 中无 wireguard 记录'"
+run "dmesg 2>/dev/null | grep -i -E 'wireguard|$WG_IF' | tail -n 30 || echo '  dmesg 中无 wireguard 记录'"
 
 # ---------------------------------------------------------------------------
 section "15. 连接跟踪 / conntrack"
 if has conntrack; then
   run "conntrack -C 2>/dev/null"
-  run "conntrack -L 2>/dev/null | grep -E '10\\.0\\.0\\.' | head -n 20 || echo '  未看到 10.0.0.x 的连接跟踪记录'"
+  run "conntrack -L 2>/dev/null | grep -E \"$WG_NET\\\\.\" | head -n 20 || echo '  未看到 $WG_NET.x 的连接跟踪记录'"
 else
   echo "  未安装 conntrack 工具（可选）"
 fi
@@ -256,3 +286,7 @@ echo "常用命令:"
 echo "  sudo wg-doctor --capture     # 抓包验证握手是否到达"
 echo "  sudo wg-uninstall            # 卸载（会自动备份配置）"
 echo "==================================================================="
+
+# exec 重定向到后台 tee，直接退出可能导致结尾内容未落盘，这里显式等待。
+wait 2>/dev/null || true
+exit 0
