@@ -1,0 +1,7 @@
+# Shell 脚本必须保持 LF：CRLF 会导致 bash 报
+# `bad interpreter: /usr/bin/env bash^M` 而无法执行。
+*.sh text eol=lf
+
+# 文本文件统一按 LF 存储，避免各平台反复改写行尾
+*.md text eol=lf
+*.conf text eol=lf
