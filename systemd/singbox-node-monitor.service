@@ -1,0 +1,14 @@
+[Unit]
+Description=sing-box node health and traffic monitor
+After=network-online.target sing-box.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/singbox-node/monitor.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sing-box-manager
+ProtectHome=true

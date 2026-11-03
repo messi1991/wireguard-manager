@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.log
+*.zip
+*.json
+*.pem
+*.key
+exports/
+.DS_Store
