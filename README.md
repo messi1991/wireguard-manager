@@ -1,6 +1,8 @@
 # sing-box-node-kit（个人多设备节点）
 
-面向**全新 Ubuntu VPS** 的个人 sing-box 节点安装与管理工具。它不是 3x-ui 面板，不安装数据库，也不开放公网 Web 管理端口。
+面向**全新 Ubuntu VPS** 的个人 **sing-box** 节点安装与管理工具。它不是 3x-ui 面板，不安装数据库，也不开放公网 Web 管理端口。
+
+> **注意**：该项目基于 **sing-box**（VLESS + REALITY + Vision / Hysteria 2），用于构建 **VPN 翻墙 / 代理节点**。仓库地址为 `messi1991/wireguard-manager`（项目名为 `wireguard-manager`）。
 
 默认部署：
 
@@ -20,19 +22,20 @@
 - systemd
 - 建议 x86_64 或 ARM64 VPS
 - 必须有 root 或 sudo 权限
+- **项目类型**：VPN 翻墙 / 代理节点（基于 sing-box VLESS+REALITY / Hysteria 2）
 
 当前 stable 仓库会安装 sing-box 稳定版，不安装 beta/alpha。2026-10-31 官方 Release 页面列出的最新稳定版本为 1.14.4；安装时 APT 会获取仓库当时的最新稳定包。
 
 ## GitHub 发布与安装
 
-1. 在 GitHub 新建一个 **Public** 仓库，例如 `singbox-node-kit`。
+1. 在 GitHub 新建一个 **Public** 仓库，例如 `wireguard-manager`。
 2. 将本目录中的文件和文件夹上传到仓库根目录，目录层级保持不变。
 3. 不要上传服务器生成的 `settings.json`、`config.json`、UUID、密码、私钥、Telegram Token、订阅文件或证书。
 4. 在新 Ubuntu VPS 上执行（将 `YOUR_GITHUB_USERNAME` 换成你的 GitHub 用户名）：
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/singbox-node-kit/main/install.sh
-sudo SINGBOX_NODE_REPO=YOUR_GITHUB_USERNAME/singbox-node-kit bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/messi1991/wireguard-manager/main/install.sh
+sudo SINGBOX_NODE_REPO=YOUR_GITHUB_USERNAME/wireguard-manager bash install.sh
 ```
 
 建议先在本地或 VPS 上查看 `install.sh` 内容再用 root 执行。仓库必须是 Public，或者另行设计 GitHub 私有仓库认证；不要把 GitHub Token 写进脚本。
